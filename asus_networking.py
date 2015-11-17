@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # coding: utf-8
 import harvest_utils
-from harvest_utils import waitVisible, waitText, getElems, getFirefox,driver,waitTextChanged, getElemText, elemWithText, waitClickable
+from harvest_utils import waitVisible, waitText, getElems, getFirefox,driver,waitTextChanged, getElemText, elemWithText, waitClickable, waitUntilStable, isReadyState,waitUntil,retryStable
 from selenium.common.exceptions import NoSuchElementException, TimeoutException, StaleElementReferenceException, WebDriverException
 from selenium.webdriver.remote.webelement import WebElement
 import sys
@@ -62,6 +62,23 @@ def glocals()->dict:
     ret.update(globals())
     return ret
 
+def retryUntilTrue(statement, timeOut:float=6.2, pollFreq:float=0.3):
+    timeElap=0
+    while timeElap<timeOut:
+        timeBegin=time.time()
+        try:
+            r = statement()
+            if r==True:
+                return r
+        except (StaleElementReferenceException,NoSuchElementException, StopIteration):
+            pass
+        except Exception as ex:
+            ulog('raise %s %s'%(type(ex),str(ex)))
+            raise ex
+        #ulog('sleep %f secs'%pollFreq)
+        time.sleep(pollFreq)
+        timeElap+=(time.time()-timeBegin)
+    raise TimeoutException(getFuncName()+': timeOut=%f'%timeOut)
 def retryA(statement, timeOut:float=6.2, pollFreq:float=0.3):
     timeElap=0
     while timeElap<timeOut:
@@ -119,34 +136,52 @@ def guessVersion(txt:str)->int:
 
 def enterFrame(iframeId:str):
     global driver
+    prev_url=driver.current_url
     url=waitVisible('iframe[id=%s]'%iframeId).get_attribute('src')
+    ulog('%s => %s'%(prev_url,url))
     driver.get(url)
+    try:
+        retryUntilTrue(isReadyState, 10, 2)
+    except TimeoutException as ex:
+        print(ex)
+        pass
 
 def fileEnumer():
     global driver,prevTrail,modelName
     CSS=driver.find_element_by_css_selector
     CSSs=driver.find_elements_by_css_selector
     try:
-        waitClickable('#lisupport a',10,1).click()
+        try:
+            waitClickable('#lisupport a',15,1.6).click()
+        except TimeoutException:
+            driver.save_screenshot('asus_no_firmware_download.png')
+            ulog('No firmware download for "%s" !'%modelName)
+            return
         enterFrame('ifame_auto_size')
         # click 'Driver & Tools'
-        waitClickable('#a_support_tab_Download',30,1).click()
+        waitClickable('#a_support_tab_Download',40,2).click()
         # switch to frame
         enterFrame('ifame_auto_size')
         # open dropdown list to select "Others" OS
         waitClickable('#mainzone_Download2_btn_select_os',10,1).click()
         retryA(lambda:elemWithText('ul.dropdown-menu.os a', "Others").click())
-        # expand firmware dropdown
-        waitClickable('#btn_type_20',20,1).click()
+        try:
+            # expand firmware dropdown
+            waitClickable('#btn_type_20',20,1).click()
+        except TimeoutException:
+            driver.save_screenshot('asus_no_firmware_download_2.png')
+            ulog('No firmware download for" %s"!'%modelName)
+            return
         # retryA(lambda:elemWithText('#download a','Firmware').click(), 20,1)
-        waitUntilStable('#div_type_20')
+        waitUntilStable('#div_type_20',3,0.4)
         tables = [_ for _ in CSSs('#div_type_20 table') 
             if getElemText(_).startswith('Description')]
+        numTables = len(tables)
+        ulog('numTables=%s'%numTables)
         versions = [getElemText(_) for _ in CSSs('#div_type_20 p')]
-        assert len(versions)==len(tables)
+        assert len(versions)==numTables
         pageUrl=driver.current_url
         startIdx = getStartIdx()
-        numTables = len(tables)
         for idx in range(startIdx, numTables):
             desc = tables[idx].text
             relDate = guessDate(desc)
@@ -167,12 +202,25 @@ def fileEnumer():
         driver.save_screenshot(getScriptName()+'_'+getFuncName()+'_excep.png')
 
 
+def goToUrl(url:str):
+    global driver
+    ulog('%s'%url)
+    driver.get(url)
+    waitUntil(isReadyState)
+
 def modelEnumer():
     global driver, prevTrail, modelName
+    rootUrl='http://www.asus.com/Networking/AllProducts/'
+    CSSs=driver.find_elements_by_css_selector
+    CSS=driver.find_element_by_css_selector
+    numElm=lambda c:len(CSSs(c))
     try:
-        driver.get('http://www.asus.com/Networking/AllProducts/')
+        goToUrl(rootUrl)
+        # retryStable(lambda:numElm('#list-table-area a'), 30,2)
         models = getElems('#list-table-area a')
+        modelNames1 = [getElemText(_) for _ in models]
         numModels=len(models)
+        ulog('numModels=%s'%numModels)
         startIdx = getStartIdx()
         for idx in range(startIdx, numModels):
             model = models[idx]
@@ -182,8 +230,12 @@ def modelEnumer():
             retryA(lambda:model.click())
             fileEnumer()
             prevTrail.pop()
-            driver.get('http://www.asus.com/Networking/AllProducts/')
+            goToUrl(rootUrl)
             models = getElems('#list-table-area a')
+            if len(models) != numModels:
+                modelNames2 = [getElemText(_) for _ in models]
+                modelNamesD = set(modelNames1) - set(modelNames2)
+                assert len(models)==numModels
     except Exception as ex:
         ipdb.set_trace()
         traceback.print_exc()

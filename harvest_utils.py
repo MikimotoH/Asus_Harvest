@@ -13,7 +13,7 @@ from selenium.webdriver.support.ui import WebDriverWait,Select
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.remote.webelement import WebElement
-from my_utils import uprint
+from my_utils import uprint,ulog
 from contextlib import contextmanager
 
 
@@ -281,3 +281,17 @@ def elemWithText(css:str, txt:str)->WebElement:
     return next((_ for _ in driver.find_elements_by_css_selector(css) 
         if txt.lower() in getElemText(_).lower()), None)
 
+def retryStable(cond, timeOut:float=5, pollFreq:float=0.5):
+    oldCond = cond()
+    ulog('oldCond=%s'%oldCond)
+    timeElapsed=0.0
+    while timeElapsed<timeOut:
+        beginTime=time.time()
+        newCond=cond()
+        if newCond != oldCond:
+            ulog('newCond=%s'%newCond)
+            oldCond=newCond
+            timeElpased=0
+        else:
+            time.sleep(pollFreq)
+            timeElapsed += time.time()-beginTime
